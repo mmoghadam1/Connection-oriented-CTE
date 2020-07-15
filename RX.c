@@ -100,7 +100,7 @@ void appMain(gecko_configuration_t *pconfig)
 		  printf("We got a connection!\r\n");
 		  connecting = 0;
 		  gecko_cmd_le_gap_end_procedure();
-		  uint16 interval = 10;
+		  uint16 interval = 5;
 		  uint8 cte_length = 0x02;
 		  uint8 cte_type = 0;
 		  uint8 slot_durations = 1;
@@ -177,14 +177,19 @@ void appMain(gecko_configuration_t *pconfig)
 	  }
 	  case gecko_evt_cte_receiver_connection_iq_report_id:{
 		  printf("GOT CONNECTION IQ report\r\n");
-		struct gecko_msg_cte_receiver_connection_iq_report_evt_t report = evt->data.evt_cte_receiver_connection_iq_report;
-		printf("status: %d, ch: %d, rssi: %d, ant:%d, cte:%d, duration:%d, len:%d\r\n", report.status,
+		 struct gecko_msg_cte_receiver_connection_iq_report_evt_t report = evt->data.evt_cte_receiver_connection_iq_report;
+		 uint8* data = malloc(report.samples.len);
+		 memcpy(report.samples.data, data, report.samples.len);
+		 printf("status: %d, ch: %d, rssi: %d, ant:%d, cte:%d, duration:%d, len:%d\r\n", report.status,
 				report.channel, report.rssi, report.rssi_antenna_id, report.cte_type, report.slot_durations,
 				report.samples.len);
 		for (int i=0; i<report.samples.len; i++) {
 			RETARGET_WriteChar(report.samples.data[i]);
 		}
 		printf("\r\n");
+
+
+
 		break;
 	  }
 	  default:
