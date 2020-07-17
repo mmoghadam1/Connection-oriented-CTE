@@ -138,7 +138,7 @@ void appMain(gecko_configuration_t *pconfig)
         	printf("We got a CONNECTION\r\n");
         	connecting = 0;
         	gecko_cmd_le_gap_end_procedure();
-        	uint8 cte_type = 0x5;  // AoA
+        	uint8 cte_type = 0x07;
         	uint8 s_len = 1;
         	uint8 sa[1] = { 0 };
 
@@ -199,6 +199,5 @@ static void bootMessage(struct gecko_msg_system_boot_evt_t *bootevt)
   printLog("%2.2x\r\n", local_addr.addr[0]);
 #endif
 }
-
 
 
