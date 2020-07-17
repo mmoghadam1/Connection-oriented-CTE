@@ -20,6 +20,7 @@
 #include "native_gecko.h"
 #include "gatt_db.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include "app.h"
 
 /* Print boot message */
@@ -101,7 +102,7 @@ void appMain(gecko_configuration_t *pconfig)
 		  connecting = 0;
 		  gecko_cmd_le_gap_end_procedure();
 		  uint16 interval = 5;
-		  uint8 cte_length = 0x02;
+		  uint8 cte_length = 0x14;
 		  uint8 cte_type = 0;
 		  uint8 slot_durations = 1;
 		  uint8 s_len = 1;
@@ -163,35 +164,41 @@ void appMain(gecko_configuration_t *pconfig)
 		  gecko_cmd_le_connection_close(evt->data.evt_gatt_server_user_write_request.connection);
 		}
 		break;
-	  case gecko_evt_cte_receiver_connectionless_iq_report_id: {
-		    printf("GOT CONNECTIONLESS IQ report\r\n");
-		    struct gecko_msg_cte_receiver_connectionless_iq_report_evt_t report = evt->data.evt_cte_receiver_connectionless_iq_report;
-			printf("status: %d, ch: %d, rssi: %d, ant:%d, cte:%d, duration:%d, len:%d\r\n", report.status,
-					report.channel, report.rssi, report.rssi_antenna_id, report.cte_type, report.slot_durations,
-					report.samples.len);
-			for (int i=0; i<report.samples.len; i++) {
-				RETARGET_WriteChar(report.samples.data[i]);
-			}
-			printf("\r\n");
-		  break;
-	  }
 	  case gecko_evt_cte_receiver_connection_iq_report_id:{
-		  printf("GOT CONNECTION IQ report\r\n");
-		 struct gecko_msg_cte_receiver_connection_iq_report_evt_t report = evt->data.evt_cte_receiver_connection_iq_report;
-		 uint8* data = malloc(report.samples.len);
-		 memcpy(report.samples.data, data, report.samples.len);
-		 printf("status: %d, ch: %d, rssi: %d, ant:%d, cte:%d, duration:%d, len:%d\r\n", report.status,
-				report.channel, report.rssi, report.rssi_antenna_id, report.cte_type, report.slot_durations,
-				report.samples.len);
-		for (int i=0; i<report.samples.len; i++) {
-			RETARGET_WriteChar(report.samples.data[i]);
+		printf("GOT CONNECTION IQ report\r\n");
+		uint8* status = malloc(2);
+		memcpy(status, & evt->data.evt_cte_receiver_connection_iq_report.status, 2);
+		uint8* ch = malloc(1);
+		memcpy(ch, & evt->data.evt_cte_receiver_connection_iq_report.channel, 1);
+		int8* rssi = malloc(1);
+		memcpy(rssi, & evt->data.evt_cte_receiver_connection_iq_report.rssi, 1);
+		uint8* ant = malloc(1);
+		memcpy(rssi, & evt->data.evt_cte_receiver_connection_iq_report.rssi_antenna_id, 1);
+		uint8* cte = malloc(1);
+		memcpy(cte, & evt->data.evt_cte_receiver_connection_iq_report.cte_type, 1);
+		uint16* durations = malloc(2);
+		memcpy(durations, & evt->data.evt_cte_receiver_connection_iq_report.cte_type, 2);
+		uint8* len = malloc(1);
+		memcpy(len, & evt->data.evt_cte_receiver_connection_iq_report.samples.len, 1);
+		uint8* data = malloc(*len);
+		memcpy(data, & evt->data.evt_cte_receiver_connection_iq_report.samples.data, *len);
+
+		printf("status: %d, ch: %d, rssi: %d, ant:%d, cte:%d, duration:%d, len:%d\r\n", *status, *ch, *rssi, *ant, *cte, *durations, *len);
+
+		for (int i=0; i<*len; i++) {
+			RETARGET_WriteChar(data[i]);
 		}
+		free(status);
+		free(ch);
+		free(rssi);
+		free(cte);
+		free(ant);
+		free(durations);
+		free(len);
+		free(data);
 		printf("\r\n");
-
-
-
-		break;
-	  }
+	  break;
+	}
 	  default:
 		break;
 	}
