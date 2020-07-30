@@ -22,14 +22,26 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <unistd.h>
+
+#include "sl_sleeptimer.h"
 
 /* Timer and GPIO libraries*/
 #include "em_timer.h"
 #include "em_gpio.h"
 #include "em_cmu.h"
+#include "em_msc.h"
 
 #include "app.h"
 #include "em_rtcc.h"
+
+
+// Default clock value
+#define HFPERCLK_IN_MHZ 19
+
+// Number of timer overflows since last interrupt;
+static volatile uint32_t overflowCount = 0;
+
 
 /* Print boot message */
 static void bootMessage(struct gecko_msg_system_boot_evt_t *bootevt);
@@ -96,26 +108,67 @@ bd_addr test_device2 = {
 		.addr = {0x58,0x8E,0x81,0xA5,0x47,0xC8}
 };
 
+void initTimer(void){
 
-TIMER_InitCC_TypeDef timerCCInit =
-	  {
-	    .eventCtrl  = timerEventEveryEdge,
-	    .edge       = timerEdgeBoth,
-	    .prsSel     = timerPRSSELCh0,
-	    .cufoa      = timerOutputActionNone,
-	    .cofoa      = timerOutputActionNone,
-	    .cmoa       = timerOutputActionToggle,
-	    .mode       = timerCCModePWM,
-	    .filter     = false,
-	    .prsInput   = false,
-	    .coist      = false,
-	    .outInvert  = false,
-	  };
+	// Enable clock to GPIO and TIMER0
+	//CMU_ClockEnable(cmuClock_GPIO, true);
+	CMU_ClockEnable(cmuClock_TIMER0, true);
+
+	// Configure PA6 as input
+	//GPIO_PinModeSet(gpioPortD, 3, gpioModePushPull, 0);
+
+	// Initialize the timer
+	TIMER_Init_TypeDef timerInit = TIMER_INIT_DEFAULT;
+	// Configure TIMER0 Compare/Capture for output compare
+	//TIMER_InitCC_TypeDef timerCCInit = TIMER_INITCC_DEFAULT;
+
+	timerInit.prescale = timerPrescale64;
+	timerInit.enable = false;
+	//timerCCInit.edge = timerEdgeFalling;
+	//timerCCInit.mode = timerCCModeCapture;
+
+	//TIMER_IntEnable(TIMER0, TIMER_IF_OF);
+	//NVIC_EnableIRQ(TIMER0_IRQn);
+
+	//TIMER_TopSet(TIMER0,CMU_ClockFreqGet(cmuClock_TIMER0));
+	TIMER_Init(TIMER0, &timerInit);
+
+	// Route Timer0 CC0 output to PA3
+	//GPIO->TIMERROUTE[0].ROUTEEN  = GPIO_TIMER_ROUTEEN_CC0PEN;
+	//GPIO->TIMERROUTE[0].CC0ROUTE = (gpioPortD << _GPIO_TIMER_CC0ROUTE_PORT_SHIFT)
+	//				| (3 << _GPIO_TIMER_CC0ROUTE_PIN_SHIFT);
+
+	//TIMER_InitCC(TIMER0, 0, &timerCCInit);
+}
+
+uint32_t calculatePeriod(void){
+
+	// Pause timer
+	TIMER_Enable(TIMER0, false);
+
+	uint32_t current_edge = TIMER_CounterGet(TIMER0);
+
+	uint32_t period = ((TIMER_TopGet(TIMER0) + 2) * overflowCount + current_edge);
+					// / (HFPERCLK_IN_MHZ * (1 << timerPrescale1));
+
+	//lastCapturedEdge = current_edge;
+
+	// Reset overflow count and timer
+	overflowCount = 0;
+	TIMER_CounterSet(TIMER0, 0);
+	TIMER_Enable(TIMER0, true);
+
+	return period;
+}
+
 
 int itr = 0;
 void TIMER0_IRQHandler(void){
 	TIMER_IntClear(TIMER0, TIMER_IF_OF);
-	printf("IN TIMER\r\n");
+	//printf("Overflow: %lu\r\n", overflowCount);
+	overflowCount++;
+	return;
+	/*
 	if(itr == 0){
 		itr++;
 		//switch tx and rx
@@ -133,9 +186,10 @@ void TIMER0_IRQHandler(void){
 		}
 	}
 	else{
-		printf("Exiting Program\r\n");
+		//printf("Exiting Program\r\n");
 		exit(0);
 	}
+	*/
 }
 
 /* Main application */
@@ -145,8 +199,7 @@ void appMain(gecko_configuration_t *pconfig){
   pconfig->sleep.flags = 0;
 #endif
 
-	uint32_t old_time = 0;
-	uint32_t new_time, delta_t;
+	uint32_t delta_t;
 
 
 	/* Set maximum number of periodic advertisers */
@@ -163,17 +216,17 @@ void appMain(gecko_configuration_t *pconfig){
 	gecko_bgapi_class_cte_receiver_init();
 
 	// Initialize Connection Parameters
-	conn_params.min_interval 	= 0x06;
-	conn_params.max_interval 	= 0x06;
-	conn_params.latency 		= 0x00;
-	conn_params.timeout 		= 0x20;
-	conn_params.min_cte_length 	= 0;
+	conn_params.min_interval 	= 0x0006;
+	conn_params.max_interval 	= 0x0006;
+	conn_params.latency 		= 0x0000;
+	conn_params.timeout 		= 0x000a;
+	conn_params.min_cte_length 	= 0x0000;
 	conn_params.max_cte_length 	= 0xffff;
 
 	// Initialize CTE RX Parameters
 	RX_params.interval 			= 1;
 	RX_params.cte_length 		= 0x14;
-	RX_params.cte_type 			= 0;
+	RX_params.cte_type 			= 1;
 	RX_params.slot_durations 	= 1;
 	RX_params.s_len 			= 1;
 	RX_params.sa[0] 			= 0;
@@ -182,26 +235,9 @@ void appMain(gecko_configuration_t *pconfig){
 	TX_params.cte_types 		= 0x07;
 	TX_params.s_len 			= 1;
 	TX_params.sa[0] 			= 0;
+	int counter = 0;
 
-	// Enable and configure Timer
-	CMU_ClockEnable(cmuClock_GPIO, true);
-	CMU_ClockEnable(cmuClock_TIMER0, true);
-
-	// Initialize pin
-	GPIO_PinModeSet(BSP_LED0_PORT, BSP_LED0_PIN, gpioModePushPull, 0);
-	// Route pins to timer
-	GPIO->TIMERROUTE[0].ROUTEEN  = GPIO_TIMER_ROUTEEN_CC0PEN | GPIO_TIMER_ROUTEEN_CC1PEN;
-	GPIO->TIMERROUTE[0].CC0ROUTE = (gpioPortD << _GPIO_TIMER_CC0ROUTE_PORT_SHIFT)
-								  | (3 << _GPIO_TIMER_CC0ROUTE_PIN_SHIFT);
-	TIMER_InitCC(TIMER0, 0, &timerCCInit);
-
-	TIMER_Init_TypeDef timerInit = TIMER_INIT_DEFAULT;
-	timerInit.prescale = timerPrescale1024;
-	timerInit.mode = timerModeUp;
-	// Enable overflow interrupt
-	TIMER_IntEnable(TIMER0, TIMER_IF_OF);
-	NVIC_EnableIRQ(TIMER0_IRQn);
-	TIMER_TopSet(TIMER0, CMU_ClockFreqGet(cmuClock_TIMER0)/1024);
+	initTimer();
 
 
 	while (1) {
@@ -218,6 +254,7 @@ void appMain(gecko_configuration_t *pconfig){
 		evt = gecko_wait_event();
 		uint16 result;
 
+
 		/* Handle events */
 		switch (BGLIB_MSG_ID(evt->header)) {
 			/* This boot event is generated when the system boots up after reset.
@@ -228,32 +265,33 @@ void appMain(gecko_configuration_t *pconfig){
 
 				uint8_t channel_map_data[5] = {3, 0, 0, 0, 0};
 				result = gecko_cmd_le_gap_set_data_channel_classification(5, channel_map_data)->result;
-				printLog("set data channel classification: %d\r\n", result);
+				//printLog("set data channel classification: %d\r\n", result);
 
 				gecko_cmd_system_set_tx_power(100);
 				gecko_cmd_le_gap_set_advertise_tx_power(0,30);
 				gecko_cmd_le_gap_set_advertise_timing(0, 160, 160, 0, 0);
-
+				result = gecko_cmd_le_gap_set_conn_timing_parameters(conn_params.min_interval,
+						conn_params.max_interval, conn_params.latency,conn_params.timeout, conn_params.min_cte_length, conn_params.max_cte_length)->result;
+				printf("Result of gecko_cmd_le_gap_set_conn_timing_parameters: 0x%x\r\n", result);
 				//Start scanning
 				gecko_cmd_le_gap_set_discovery_timing(le_gap_phy_1m, 20, 10);
 				gecko_cmd_le_gap_start_discovery(le_gap_phy_1m, le_gap_discover_generic);
-				printLog("\r\nScanning\r\n");
 
 				// Start extended advertising
 				result = gecko_cmd_le_gap_start_advertising(0,le_gap_general_discoverable, le_gap_connectable_scannable)->result;
-				printf("le_gap_start_advertising() returns 0x%X\r\n", result);
+				//printf("le_gap_start_advertising() returns 0x%X\r\n", result);
 			break;
 
 			case gecko_evt_le_gap_scan_response_id: {
 				if(compare_bd_addr(&conn_params.local_addr, &evt->data.evt_le_gap_scan_response.address)){
-					printf("Same device\r\n");
+					//printf("Same device\r\n");
 				break;
 				}
 				bool is_right_device = compare_bd_addr(&test_device1,&evt->data.evt_le_gap_scan_response.address)
 									 | compare_bd_addr(&test_device2,&evt->data.evt_le_gap_scan_response.address);
 				if (!connecting && is_right_device){
-					printLog("\r\nDevice found\r\n");
-					printLog("Initiating connection\r\n");
+					//printLog("\r\nDevice found\r\n");
+					//printLog("Initiating connection\r\n");
 
 					/*
 					printf("advertisement/scan response from: ");
@@ -264,7 +302,7 @@ void appMain(gecko_configuration_t *pconfig){
 					*/
 
 					// RX initiates connection
-					conn_params.connection_addr = evt->data.evt_le_gap_scan_response.address;
+					memcpy(&conn_params.connection_addr, &evt->data.evt_le_gap_scan_response.address,sizeof(bd_addr));
 					if(becomeRX())
 					  gecko_cmd_le_gap_connect(evt->data.evt_le_gap_scan_response.address, evt->data.evt_le_gap_scan_response.address_type, 1);
 
@@ -279,15 +317,23 @@ void appMain(gecko_configuration_t *pconfig){
 				//printf("We got a CONNECTION\r\n");
 				connecting = 0;
 				// Stop scanning & advertising
-				gecko_cmd_le_gap_end_procedure();
-				gecko_cmd_le_gap_stop_advertising(0);
+				result = gecko_cmd_le_gap_end_procedure()->result;
+				printf("Result of gecko_cmd_le_gap_end_procedure: 0x%x\r\n", result);
 
-				conn_params.connection_handle = evt->data.evt_le_connection_opened.connection;
-				conn_params.connection_addr = evt->data.evt_le_connection_opened.address;
+				result = gecko_cmd_le_gap_stop_advertising(0)->result;
+				printf("Result of gecko_cmd_le_gap_stop_advertising: 0x%x\r\n", result);
+
+				//conn_params.connection_handle = evt->data.evt_le_connection_opened.connection;
+				//conn_params.connection_addr = evt->data.evt_le_connection_opened.address;
+				memcpy(&conn_params.connection_handle, &evt->data.evt_le_connection_opened.connection, 1);
+				memcpy(&conn_params.connection_addr, &evt->data.evt_le_connection_opened.address, sizeof(bd_addr));
 
 				// Set connection parameters
-				gecko_cmd_le_connection_set_timing_parameters(conn_params.connection_handle, conn_params.min_interval, conn_params.max_interval,
-						conn_params.latency,conn_params.timeout, conn_params.min_cte_length, conn_params.max_cte_length);
+				//result = gecko_cmd_le_connection_set_timing_parameters(conn_params.connection_handle, conn_params.min_interval,
+					//	conn_params.max_interval, conn_params.latency,conn_params.timeout, conn_params.min_cte_length, conn_params.max_cte_length)->result;
+				//printf("Result of gecko_cmd_le_connection_set_timing_parameters: 0x%x\r\n", result);
+				result = gecko_cmd_le_connection_set_preferred_phy(conn_params.connection_handle, 0x02, 0x02)->result;
+				printf("Result of gecko_cmd_le_connection_set_preferred_phy: 0x%x\r\n", result);
 				/*
 				printLog("LOCAL device address: ");
 				for (int i = 0; i < 5; i++) {
@@ -301,7 +347,6 @@ void appMain(gecko_configuration_t *pconfig){
 				}
 				printLog("%2.2x\r\n", conn_params.connection_addr.addr[0]);
 				*/
-
 				if(becomeRX()){
 					uint16 rx_result = gecko_cmd_cte_receiver_enable_connection_cte(conn_params.connection_handle, RX_params.interval,
 										  RX_params.cte_length, RX_params.cte_type, RX_params.slot_durations, RX_params.s_len, RX_params.sa)->result;
@@ -312,7 +357,9 @@ void appMain(gecko_configuration_t *pconfig){
 														  TX_params.s_len, TX_params.sa)->result;
 					printf("Result of tx_enable_connection_cte: 0x%x\r\n", tx_result);
 				}
-				TIMER_Init(TIMER0, &timerInit);
+				//if(becomeRX())
+					//TIMER_Init(TIMER0, &timerInit);
+
 			break;
 
 
@@ -329,54 +376,132 @@ void appMain(gecko_configuration_t *pconfig){
 					else
 						gecko_cmd_cte_receiver_disable_connection_cte(conn_params.connection_handle);
 					// Restart advertising and scanning
-					return;
 					gecko_cmd_le_gap_start_advertising(0, le_gap_general_discoverable, le_gap_connectable_scannable);
 					gecko_cmd_le_gap_start_discovery(le_gap_phy_1m,le_gap_discover_observation);
 				}
 			break;
 
+
+			case gecko_evt_le_connection_parameters_id: {
+				printf("SET CONN PARAM \r\n");
+				struct gecko_msg_le_connection_parameters_evt_t* r = &(evt->data.evt_le_connection_parameters);
+
+				printf("Interval: %d \r\n", r->interval);
+				//printf("Interval: %d \r\n", r->interval);
+				//printf("Interval: %d \r\n", r->interval);
+			}
+			break;
+
 			case gecko_evt_cte_receiver_connection_iq_report_id: {
 
-				struct gecko_msg_cte_receiver_connection_iq_report_evt_t *report =
-						&(evt->data.evt_cte_receiver_connection_iq_report);
+				if(itr == 1){
 
-				new_time = RTCC_CounterGet();
-				delta_t = new_time - old_time;
-				old_time = new_time;
+					delta_t = calculatePeriod();
 
-				RETARGET_WriteChar(0xFF);
-				RETARGET_WriteChar(0xFF);
-				RETARGET_WriteChar(0xFF);
-				RETARGET_WriteChar(0xFF);
-				uint16 event = report->event_counter;
-				RETARGET_WriteChar((event) & 0xFF);
-				RETARGET_WriteChar((event>>8) & 0xFF);
+					struct gecko_msg_cte_receiver_connection_iq_report_evt_t *report =
+							&(evt->data.evt_cte_receiver_connection_iq_report);
+
+
+					uint32_t offset = (4+3+report->samples.len);
+
+
+					uint8_t * userDataPage = (uint8_t *) RAM_MEM_BASE;
+					//uint8_t *temp = (uint8_t *) &delta_t;
+					uint8_t preData[] = {
+						0xFF,
+						report->channel,
+						report->samples.len,
+
+					};
+					memcpy(RAM_MEM_BASE+offset*counter, preData, sizeof(preData));
+					memcpy(RAM_MEM_BASE+offset*counter+sizeof(preData), &delta_t, sizeof(delta_t));
+					memcpy(RAM_MEM_BASE+offset*counter+sizeof(preData)+sizeof(delta_t), &report->samples.data, report->samples.len);
+					//printf("dt: %lu\r\n", delta_t);
+
+					counter++;
+					if(counter == 8){
+
+						for(int k=0; k<counter; k++){
+							uint8_t* f = malloc(1);
+							uint8_t* ch = malloc(1);
+							uint8_t* len = malloc(1);
+							uint32_t* dt = malloc(4);
+							uint8_t* data = malloc(report->samples.len);
+
+							memcpy(f, userDataPage + 0*sizeof(uint8_t) + offset*k,sizeof(uint8_t));
+							for(int i=0; i< 4; i++)
+								RETARGET_WriteChar(*f);
+
+							memcpy(ch, userDataPage + 1*sizeof(uint8_t) + offset*k,sizeof(uint8_t));
+							RETARGET_WriteChar(*ch);
+
+							memcpy(len, userDataPage + 2*sizeof(uint8_t) + offset*k,sizeof(uint8_t));
+							RETARGET_WriteChar(*len);
+
+							memcpy(dt, userDataPage + 3*sizeof(uint8_t) + offset*k,sizeof(uint32_t));
+							uint8_t* temp = (uint8_t *) dt;
+							for (int i=0; i<4; i++) {
+								RETARGET_WriteChar(temp[i]);
+							}
+							memcpy(data, userDataPage + 3*sizeof(uint8_t) + sizeof(uint32_t) + offset*k, report->samples.len);
+							for (int i=0; i<report->samples.len; i++) {
+								RETARGET_WriteChar(data[i]);
+							}
+
+							RETARGET_WriteChar('\r');
+							RETARGET_WriteChar('\n');
+							free(f);
+							free(ch);
+							free(len);
+							free(dt);
+							free(data);
+
+						}
+						//counter=0;
+						exit(0);
+					}
+				}
+				else{
+					itr++;
+					TIMER_Enable(TIMER0, true);
+				}
+
+
+
+
+				//RETARGET_WriteChar(ch);
+
+				/*
 				RETARGET_WriteChar(report->channel);
-				RETARGET_WriteChar(-report->rssi);
-				uint8_t *temp = (uint8_t *) &delta_t;
+				RETARGET_WriteChar(report->samples.len);
+				uint8_t* temp = (uint8_t *) &delta_t;
 				for (int i=0; i<4; i++) {
 					RETARGET_WriteChar(temp[i]);
 				}
-				RETARGET_WriteChar(report->samples.len);
+
 
 				for (int i=0; i<report->samples.len; i++) {
 					RETARGET_WriteChar(report->samples.data[i]);
 				}
-				printf("\r\n");
+				RETARGET_WriteChar('\r');
+				RETARGET_WriteChar('\n');
+				*/
 				/*
-
 				printf("GOT CONNECTION IQ report\r\n");
 
-				printf("status: %d, ch: %d, rssi: %d, ant:%d, cte:%d, duration:%d, len:%d\r\n",
-						report->status, report->channel, report->rssi, report->rssi_antenna_id,
-						report->cte_type, report->slot_durations, report->samples.len);
+				printf("status: %d, event:%d, phy: %d, ch: %d, rssi: %d, ant:%d, cte_type:%d, slot_duration:%d, delta_t:%lu, len:%d \r\n",
+						report->status,report->event_counter, report->phy, report->channel, report->rssi, report->rssi_antenna_id,
+						report->cte_type, report->slot_durations, delta_t, report->samples.len);
 
 				for (int i=0; i < report->samples.len; i++) {
 					RETARGET_WriteChar(report->samples.data[i]);
 				}
-
-				printf("\r\n");
 				*/
+
+
+				//printf("%lu \r\n", delta_t);
+
+
 
 
 			}
@@ -395,14 +520,14 @@ static void bootMessage(struct gecko_msg_system_boot_evt_t *bootevt)
 #if DEBUG_LEVEL
   int i;
 
-  printLog("stack version: %u.%u.%u\r\n", bootevt->major, bootevt->minor, bootevt->patch);
+  //printLog("stack version: %u.%u.%u\r\n", bootevt->major, bootevt->minor, bootevt->patch);
   conn_params.local_addr = gecko_cmd_system_get_bt_address()->address;
 
-  printLog("local BT device address: ");
+  //printLog("local BT device address: ");
   for (i = 0; i < 5; i++) {
-    printLog("%2.2x:", conn_params.local_addr.addr[5 - i]);
+    //printLog("%2.2x:", conn_params.local_addr.addr[5 - i]);
   }
-  printLog("%2.2x\r\n", conn_params.local_addr.addr[0]);
+  //printLog("%2.2x\r\n", conn_params.local_addr.addr[0]);
 #endif
 }
 
